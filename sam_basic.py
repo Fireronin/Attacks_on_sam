@@ -3,7 +3,11 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import cv2
-
+import sys
+from torch.autograd import Variable
+from typing import Optional, Tuple
+sys.path.append("..")
+from segment_anything import sam_model_registry, SamPredictor
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # %%
@@ -35,7 +39,7 @@ def show_box(box, ax):
 # ## Example image
 
 # %%
-image = cv2.imread('./dog_small.jpg')
+image = cv2.imread('./person.jpg')
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 # %%
@@ -45,15 +49,9 @@ plt.axis('on')
 plt.show()
 
 # %%
-import sys
-sys.path.append("..")
-from segment_anything import sam_model_registry, SamPredictor
-
 #sam_checkpoint = "sam_vit_h_4b8939.pth"
 sam_checkpoint = "sam_vit_b_01ec64.pth"
 model_type = "vit_b"
-
-device = "cuda"
 
 sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
 sam.to(device=device)
@@ -63,9 +61,8 @@ predictor = SamPredictor(sam)
 # %%
 predictor.set_image(image)
 
-# %%
-input_point = np.array([[120, 150]])
-input_label = np.array([1])
+input_point = np.array([[120, 170],[120,100]])
+input_label = np.array([1,1])
 
 # %%
 plt.figure(figsize=(10,10))
@@ -96,46 +93,12 @@ for i, (mask, score) in enumerate(zip(masks, scores)):
     plt.show()  
   
 
-# save mask
-# flip it 
-# then compute IoU with original mask
 #%%
-# from sklearn.metrics import jaccard_score
 
-# # Save the mask
-# #np.save('mask.npy', masks[0])
-
-# # Flip the mask
-# flipped_mask = np.flip(masks[0], axis=1)
-
-# copy the mask
 orginal_mask = np.copy(masks[0])
 
-# Compute IoU with the original mask
-# iou = jaccard_score(masks[0].flatten(), flipped_mask.flatten())
-# print(f"IoU between the original and flipped mask: {iou}")
+
 # %%
-
-def flip_image(image):
-    return np.flip(image, axis=1)
-
-fliped_image = flip_image(image)
-
-predictor.set_image(fliped_image)
-masks, scores, logits = predictor.predict(
-    point_coords=input_point,
-    point_labels=input_label,
-    multimask_output=False,
-)
-predictor.reset_image()
-# iou = jaccard_score(orginal_mask.flatten(), (masks[0].flatten()))
-# print(f"IoU between the original and flipped image: {iou}")
-# %%
-import torch
-from torch.autograd import Variable
-from typing import Optional, Tuple
-
-
 transformed = predictor.transform.apply_image(image)
 image_torch = torch.tensor(transformed, requires_grad=True, dtype=torch.float32,device=device)
 image_torch = image_torch.permute(2, 0, 1)
@@ -157,6 +120,9 @@ input_label_torch = input_label_torch.to(device)
 
 #sam.requires_grad_(True)
 sam.eval()
+# frrze the model
+for param in sam.parameters():
+    param.requires_grad = False
 
 def predict_torch(
     image_embeddings,
@@ -197,12 +163,12 @@ def predict_torch(
     return masks, iou_predictions, low_res_masks
 
 def iou(mask1, mask2):
-    mask1 = mask1 > sam.mask_threshold
-    mask2 = mask2 > sam.mask_threshold
-    print(mask1.shape)
-    print(mask2.shape)
-    intersection = torch.logical_and(mask1, mask2)
-    union = torch.logical_or(mask2, mask1)
+    # mask1 = mask1 > sam.mask_threshold
+    # mask2 = mask2 > sam.mask_threshold
+    # print(mask1.shape)
+    # print(mask2.shape)
+    intersection = torch.min(mask1, mask2)
+    union = torch.max(mask2, mask1)
     iou_score = torch.sum(intersection) / torch.sum(union)
     return iou_score
 
@@ -231,8 +197,10 @@ def loss(image, original_mask, input_point, input_label):
     last_mask = masks
     print(masks.shape)
     #return 1 - iou(original_mask, masks)
-    return mask_reduction(original_mask, masks)
+    return iou(original_mask, masks)
 
+
+#%%
 # Gradient descent loop
 for i in range(5):  # Number of iterations
     optimizer.zero_grad()  # Zero out the gradients
@@ -292,3 +260,22 @@ else:
     result = torch.mean(mask)
 
 # %%
+image_embeddings = sam.image_encoder(image_torch)
+masks, scores, logits = predict_torch(image_embeddings, point_coords=input_point_torch, point_labels=input_label_torch, multimask_output=False, return_logits=True, )
+masks = masks.cpu().detach().numpy()
+scores = scores.cpu().detach().numpy()
+# %%
+for i, (mask, score) in enumerate(zip(masks, scores)):
+    plt.figure(figsize=(10,10))
+    # switch channels
+    image_torch_fixed = image_torch.permute(0, 2, 3, 1)
+    plt.imshow(image_torch_fixed.cpu().detach().numpy()[0]/255)
+    #plt.imshow(image)
+    show_mask(mask[0], plt.gca())
+    show_points(input_point, input_label, plt.gca())
+    plt.title(f"Mask {i+1}, Score: {score[0]:.3f}", fontsize=18)
+    plt.axis('off')
+    plt.show()  
+# %%
+
+
