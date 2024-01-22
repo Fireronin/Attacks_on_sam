@@ -2,6 +2,8 @@
 #!wget -q https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 CHECKPOINT_PATH='./sam_vit_h_4b8939.pth'
 
+from dotenv import load_dotenv
+load_dotenv()
 
 import torch
 DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
