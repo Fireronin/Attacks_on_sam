@@ -68,32 +68,35 @@ input_point_torch = input_point_torch.unsqueeze(0).to(device)
 input_label_torch = input_label_torch.unsqueeze(0).to(device)
 
 sam.eval()
-for param in sam.parameters():
-    param.requires_grad = False
+# for param in sam.parameters():
+#     param.requires_grad = False
     
 def loss(image, original_mask, input_point, input_label):
     image_embeddings = sam.image_encoder(image)
     masks, scores, logits = predict_torch(sam, image_embeddings, point_coords=input_point, point_labels=input_label, multimask_output=False, return_logits=True)
     mask = masks.squeeze()
-    print(mask.shape)
-    print(original_mask.shape)
     return -torch.nn.functional.mse_loss(mask, original_mask), mask
 
 # Gradient descent loop
 for i in range(EPOCHS):  # Number of iterations
     optimizer.zero_grad()  # Zero out the gradients
+
     loss_value, mask = loss(image, correct_mask, input_point_torch, input_label_torch)  # Compute the loss
-    print(f"Loss: {loss_value}")
-    loss_value.backward(retain_graph=True)  # Compute the gradients
+    loss_value.backward()  # Compute the gradients
+
     optimizer.step()  # Update the image tensor
+
+    with torch.no_grad():
+        image = torch.max(image, torch.zeros_like(image))
+        image = torch.min(image, torch.ones_like(image) * 255)
 
     # resize the mask to 1024,1024 using torch.nn.functional.interpolate
     mask = torch.nn.functional.interpolate(mask.reshape(1, 1, mask.shape[-2], mask.shape[-1]), size=(1024,1024), mode='bilinear').squeeze().detach().cpu().numpy()
     # mask = mask > 0
 
     image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
-    image_numpy = np.maximum(image_numpy, np.zeros_like(image_numpy))
-    image_numpy = np.minimum(image_numpy, np.ones_like(image_numpy))
+    # image_numpy = np.maximum(image_numpy, np.zeros_like(image_numpy))
+    # image_numpy = np.minimum(image_numpy, np.ones_like(image_numpy))
 
     plt.figure(figsize=(10,10))
     plt.imshow(image_numpy)
@@ -109,8 +112,6 @@ plt.axis('off')
 plt.show()
 
 image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
-image_numpy = np.maximum(image_numpy, np.zeros_like(image_numpy))
-image_numpy = np.minimum(image_numpy, np.ones_like(image_numpy))
 plt.figure(figsize=(10,10))
 plt.imshow(image_numpy)
 plt.title('Edited image')
