@@ -4,17 +4,23 @@ import torch
 from typing import Optional, Tuple
 import matplotlib as plt
 
-def show_mask(mask, ax, random_color=False,target_size=None):
+def show_mask(mask, ax, sam, random_color=False,target_size=None):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
+        color = np.array([30.0/255, 144.0/255, 255.0/255, 0.6])
+   
+    # mask = np.maximum(mask, np.zeros_like(mask))
+    # mask = mask/np.max(mask)
+    mask = mask > sam.mask_threshold
     h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    # resize the mask to target_size (if provided) (H,W) -> (target_size, target_size)
+    mask = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+
     if target_size:
-        mask_image = cv2.resize(mask_image, (target_size, target_size))
-    ax.imshow(mask_image)
+        mask = cv2.resize(mask, (target_size, target_size))
+    # print(np.min(mask))
+    # print(np.max(mask))
+    ax.imshow(mask)
     
 def show_points(coords, labels, ax, marker_size=375):
     pos_points = coords[labels==1]
