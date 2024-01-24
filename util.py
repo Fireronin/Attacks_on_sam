@@ -2,17 +2,18 @@ import numpy as np
 import cv2
 import torch
 from typing import Optional, Tuple
-import matplotlib as plt
+import matplotlib.pyplot as plt
 
-def show_mask(mask, ax, sam, random_color=False,target_size=None):
+def show_mask(mask, ax, random_color=False,target_size=None):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
         color = np.array([30.0/255, 144.0/255, 255.0/255, 0.6])
+
+    mask = mask.detach().cpu().numpy()
    
     # mask = np.maximum(mask, np.zeros_like(mask))
     # mask = mask/np.max(mask)
-    mask = mask > sam.mask_threshold
     h, w = mask.shape[-2:]
     mask = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
 
@@ -23,6 +24,8 @@ def show_mask(mask, ax, sam, random_color=False,target_size=None):
     ax.imshow(mask)
     
 def show_points(coords, labels, ax, marker_size=375):
+    # coords = coords.detach().cpu().numpy()
+    # labels = labels.detach().cpu().numpy()
     pos_points = coords[labels==1]
     neg_points = coords[labels==0]
     ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
@@ -35,11 +38,9 @@ def show_box(box, ax):
 
 def predict_torch(
     sam,
-    image_embeddings,
+    image,
     point_coords: Optional[torch.Tensor],
     point_labels: Optional[torch.Tensor],
-    boxes: Optional[torch.Tensor] = None,
-    mask_input: Optional[torch.Tensor] = None,
     multimask_output: bool = True,
     return_logits: bool = False, ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     
@@ -47,6 +48,9 @@ def predict_torch(
         points = (point_coords, point_labels)
     else:
         points = None
+    
+    image = sam.preprocess(image)
+    image_embeddings = sam.image_encoder(image)
 
     # Embed prompts
     sparse_embeddings, dense_embeddings = sam.prompt_encoder(
@@ -70,7 +74,7 @@ def predict_torch(
     if not return_logits:
         masks = masks > sam.mask_threshold
 
-    return masks, iou_predictions, low_res_masks
+    return masks, iou_predictions
 
 def iou_float(mask1, mask2):
     intersection = torch.min(mask1, mask2)
@@ -81,3 +85,25 @@ def iou_float(mask1, mask2):
 
 def mse(mask1, mask2):
     return torch.mean((mask1 - mask2)**2)
+
+def display_image(image, mask=None, mask_threshold=None, points_labels=None, title=None, show_axis=False):
+    plt.figure(figsize=(10,10))
+    image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
+    plt.imshow(image_numpy)
+    if mask is not None:
+        mask = torch.nn.functional.interpolate(mask.reshape(1, 1, mask.shape[-2], mask.shape[-1]), size=image.shape[-2:], mode='bilinear').squeeze()
+        if mask_threshold is not None:
+            mask = mask > mask_threshold
+        show_mask(mask, plt.gca())
+    if points_labels is not None:
+        points, labels = points_labels
+        points = points.detach().cpu().numpy()
+        labels = labels.detach().cpu().numpy()
+        show_points(points, labels, plt.gca())
+    if title is not None:
+        plt.title(title)
+    if show_axis:
+        plt.axis('on')
+    else:
+        plt.axis('off')
+    plt.show()

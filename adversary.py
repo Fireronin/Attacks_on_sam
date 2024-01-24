@@ -1,119 +1,77 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from util import show_points, show_mask, show_box, predict_torch, iou_float
+from util import show_points, show_mask, show_box, predict_torch, iou_float, display_image
 
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
 import cv2
 from torch.autograd import Variable
-from segment_anything import sam_model_registry, SamPredictor
-
-EPOCHS = 3
-SAM_CHECKPOINT = "sam_vit_b_01ec64.pth"
-MODEL_TYPE = "vit_b"
-
-IMAGE_PATH = './person.jpg'
-INPUT_POINTS = np.array([[120, 170],[120,100]])
-INPUT_LABELS = np.array([1,1])
+from segment_anything import sam_model_registry
+from segment_anything.utils.transforms import ResizeLongestSide
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f'Device: {device}')
 
-image = cv2.imread(IMAGE_PATH)
-image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+EPOCHS = 30
+LEARNING_RATE = 2
+SAM_CHECKPOINT = "sam_vit_b_01ec64.pth"
+MODEL_TYPE = "vit_b"
 
-plt.figure(figsize=(10,10))
-plt.imshow(image)
-show_points(INPUT_POINTS, INPUT_LABELS, plt.gca())
-plt.title('Input points')
-plt.axis('on')
-plt.show()
-
-original_image = image
+IMAGE_PATH = './person.jpg'
+INPUT_POINTS = np.array([[120.0, 170.0],[120.0, 100.0]])
+INPUT_LABELS = np.array([1.0, 1.0])
 
 sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
 sam.to(device=device)
-predictor = SamPredictor(sam)
-predictor.set_image(image)
-masks, scores, logits = predictor.predict(
-    point_coords=INPUT_POINTS,
-    point_labels=INPUT_LABELS,
-    multimask_output=False,
-    return_logits=True,
-)
-correct_mask = np.copy(masks[0])
-score = scores[0]
+transform = ResizeLongestSide(sam.image_encoder.img_size)
 
-plt.figure(figsize=(10,10))
-plt.imshow(image)
-show_mask(correct_mask, plt.gca(), sam)
-show_points(INPUT_POINTS, INPUT_LABELS, plt.gca())
-plt.title(f"Score: {score:.3f}", fontsize=18)
-plt.axis('off')
-plt.show()
+image = cv2.imread(IMAGE_PATH)
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-image = predictor.transform.apply_image(image)
-image = torch.tensor(image, requires_grad=True, dtype=torch.float32,device=device).permute(2, 0, 1).unsqueeze(0)
+original_size = image.shape[-2:]
+image = transform.apply_image(image)
+image = torch.tensor(image, requires_grad=True, dtype=torch.float, device=device).permute(2, 0, 1).contiguous().unsqueeze(0)
+original_image = image.clone().detach()
+
+input_points_transformed = transform.apply_coords(INPUT_POINTS, original_size)
+input_points_transformed = torch.tensor(input_points_transformed, dtype=torch.float, device=device, requires_grad=True).unsqueeze(0)
+input_labels_transformed = torch.tensor(INPUT_LABELS, dtype=torch.int, device=device).unsqueeze(0)
+
+display_image(image, points_labels=(input_points_transformed, input_labels_transformed), title="Input points", show_axis=True)
+
+masks, scores = predict_torch(sam, original_image, point_coords=input_points_transformed, point_labels=input_labels_transformed, multimask_output=False, return_logits=True)
+target_mask = masks.squeeze().detach()
+score = scores.squeeze()
+
+display_image(image, mask=target_mask, mask_threshold=sam.mask_threshold, points_labels=(input_points_transformed, input_labels_transformed), title=f"Score: {score.item():.3f}")
+
 image = Variable(image, requires_grad=True)
-
-correct_mask = torch.from_numpy(correct_mask).float().to(device)
-
-optimizer = torch.optim.Adam([image], lr=0.1)
-
-input_point_torch = torch.from_numpy(INPUT_POINTS).float()*4
-input_label_torch = torch.from_numpy(INPUT_LABELS).float()
-input_point_torch = input_point_torch.unsqueeze(0).to(device)
-input_label_torch = input_label_torch.unsqueeze(0).to(device)
+optimizer = torch.optim.Adam([image], lr=LEARNING_RATE)
 
 sam.eval()
-# for param in sam.parameters():
-#     param.requires_grad = False
+for param in sam.parameters():
+    param.requires_grad = False
     
-def loss(image, original_mask, input_point, input_label):
-    image_embeddings = sam.image_encoder(image)
-    masks, scores, logits = predict_torch(sam, image_embeddings, point_coords=input_point, point_labels=input_label, multimask_output=False, return_logits=True)
+def loss(image, target_mask, input_points, input_labels):
+    masks, _ = predict_torch(sam, image, point_coords=input_points, point_labels=input_labels, multimask_output=False, return_logits=True)
     mask = masks.squeeze()
-    return -torch.nn.functional.mse_loss(mask, original_mask), mask
+    return -torch.nn.functional.mse_loss(mask, target_mask), mask
 
 # Gradient descent loop
-for i in range(EPOCHS):  # Number of iterations
-    optimizer.zero_grad()  # Zero out the gradients
+for i in range(EPOCHS): 
+    optimizer.zero_grad() 
 
-    loss_value, mask = loss(image, correct_mask, input_point_torch, input_label_torch)  # Compute the loss
-    loss_value.backward()  # Compute the gradients
+    loss_value, mask = loss(image, target_mask, input_points_transformed, input_labels_transformed)
+    loss_value.backward()
 
-    optimizer.step()  # Update the image tensor
-
+    optimizer.step()
     with torch.no_grad():
-        image = torch.max(image, torch.zeros_like(image))
-        image = torch.min(image, torch.ones_like(image) * 255)
+        image[image<0] = 0
+        image[image>255] = 255
 
-    # resize the mask to 1024,1024 using torch.nn.functional.interpolate
-    mask = torch.nn.functional.interpolate(mask.reshape(1, 1, mask.shape[-2], mask.shape[-1]), size=(1024,1024), mode='bilinear').squeeze().detach().cpu().numpy()
-    # mask = mask > 0
+    display_image(image, mask=mask, mask_threshold=sam.mask_threshold, points_labels=(input_points_transformed, input_labels_transformed))
 
-    image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
-    # image_numpy = np.maximum(image_numpy, np.zeros_like(image_numpy))
-    # image_numpy = np.minimum(image_numpy, np.ones_like(image_numpy))
+display_image(original_image, title='Original image')
 
-    plt.figure(figsize=(10,10))
-    plt.imshow(image_numpy)
-    show_mask(mask, plt.gca(), sam)
-    show_points(INPUT_POINTS*4, INPUT_LABELS, plt.gca())
-    plt.axis('off')
-    plt.show()
-
-plt.figure(figsize=(10,10))
-plt.imshow(original_image)
-plt.title('Original image')
-plt.axis('off')
-plt.show()
-
-image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
-plt.figure(figsize=(10,10))
-plt.imshow(image_numpy)
-plt.title('Edited image')
-plt.axis('off')
-plt.show()
+display_image(image, title='Edited image')
