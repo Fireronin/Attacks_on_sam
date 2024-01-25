@@ -41,6 +41,7 @@ def predict_torch(
     image,
     point_coords: Optional[torch.Tensor],
     point_labels: Optional[torch.Tensor],
+    boxes: Optional[torch.Tensor],
     multimask_output: bool = True,
     return_logits: bool = False, ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     
@@ -55,7 +56,7 @@ def predict_torch(
     # Embed prompts
     sparse_embeddings, dense_embeddings = sam.prompt_encoder(
         points=points,
-        boxes=None,
+        boxes=boxes,
         masks=None,
     )
 
@@ -86,7 +87,7 @@ def iou_float(mask1, mask2):
 def mse(mask1, mask2):
     return torch.mean((mask1 - mask2)**2)
 
-def display_image(image, mask=None, mask_threshold=None, points_labels=None, title=None, show_axis=False):
+def display_image(image, mask=None, mask_threshold=None, points_labels=None, boxes=None, title=None, show_axis=False):
     plt.figure(figsize=(10,10))
     image_numpy = image.detach().cpu().numpy().squeeze().transpose(1,2,0)/255
     plt.imshow(image_numpy)
@@ -100,6 +101,10 @@ def display_image(image, mask=None, mask_threshold=None, points_labels=None, tit
         points = points.detach().cpu().numpy()
         labels = labels.detach().cpu().numpy()
         show_points(points, labels, plt.gca())
+    if boxes is not None:
+        boxes = boxes.detach().cpu().numpy()
+        for box in boxes:
+            show_box(box, plt.gca())
     if title is not None:
         plt.title(title)
     if show_axis:
